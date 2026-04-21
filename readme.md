@@ -14,6 +14,10 @@ For DNF work, `results.csv` (per-driver race outcome) and `status.csv` (finish s
 
 Train a **prediction model for DNF** — treated here as binary classification (finished the race vs did not finish). Label construction, feature engineering, and model choice are defined in the project notebook or code.
 
+## Schedule
+
+Milestones, roles, and checklists for the June 7 deadline: [`DEADLINES.md`](DEADLINES.md).
+
 ## Setup
 
 Download the dataset from Kaggle and place the CSV files in a local folder (for example `data/`).
