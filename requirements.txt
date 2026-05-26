@@ -2,3 +2,8 @@ pandas
 jupyter
 matplotlib
 streamlit
+scikit-learn
+lightgbm
+xgboost
+optuna
+joblib
