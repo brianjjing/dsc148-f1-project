@@ -216,7 +216,8 @@ with col_a:
     st.markdown("# 🏎️ F1 DNF Predictor")
     st.caption(
         "Predicting F1 race-day Did Not Finish (DNF) outcomes using "
-        "historical results, starting grid, and rolling driver/constructor reliability metrics."
+        "historical results, starting grid, and rolling driver/constructor reliability metrics. "
+        "[📄 Read the Paper (PDF)](https://huggingface.co/spaces/EricGan64/F1-project/resolve/main/dsc148_v2.pdf)"
     )
 with col_b:
     st.markdown(
