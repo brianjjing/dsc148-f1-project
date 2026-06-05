@@ -1,4 +1,4 @@
-# DSC148 — Formula 1 DNF prediction
+# Formula 1 DNF Prediction
 
 This project uses historical Formula 1 race data to build a model that predicts whether a driver **did not finish (DNF)** a race.
 
@@ -14,12 +14,37 @@ For DNF work, `results.csv` (per-driver race outcome) and `status.csv` (finish s
 
 Train a **prediction model for DNF** — treated here as binary classification (finished the race vs did not finish). Label construction, feature engineering, and model choice are defined in the project notebook or code.
 
-## Schedule
-
-Milestones, roles, and checklists for the June 7 deadline: [`DEADLINES.md`](DEADLINES.md).
-
 ## Setup
 
-Download the dataset from Kaggle and place the CSV files in a local folder (for example `data/`).
+1. **Install Dependencies:**
+   From the project root, install the required packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-From the project root, run `pip install -r requirements.txt` and open `notebooks/exploration_template.ipynb` to start exploring the CSVs (use the project root as the notebook working directory, or the notebook resolves `data/` automatically).
+2. **Obtain the Dataset:**
+   * **Automatic:** Open [exploration_template.ipynb](exploration_template.ipynb) and run the setup cells to automatically download and extract the dataset from Google Drive into a `data/` folder.
+   * **Manual:** Download the [Formula 1 World Championship (1950–2020)](https://www.kaggle.com/datasets/rohanrao/formula-1-world-championship-1950-2020) dataset from Kaggle and place the CSV files inside a folder named `data/` at the project root.
+
+## Running the Notebooks
+
+For imports and paths to resolve correctly, always launch Jupyter or start your notebook kernel with the **project root directory** (`dsc148-f1-project/`) as the working directory.
+
+* **Exploratory Data Analysis:** Open and run [exploration_template.ipynb](exploration_template.ipynb) to start exploring the CSVs and verifying the data structure.
+* **Model Training & Tuning:** Open and run [model/all_models.ipynb](model/all_models.ipynb) to train baseline models, run the Optuna hyperparameter optimization, and view the evaluation visualizations.
+
+*(Optional)* You can also run the entire training, tuning, and feature ablation workflow as a standalone script in your terminal by executing:
+```bash
+python model/train_models.py
+```
+
+## Running the Interactive Demo Dashboard
+
+We built a live **Streamlit dashboard** that allows users to make real-time predictions. The interface maps driver, constructor, and track inputs to their exact historical IDs, computes rolling DNF rates and ages on-the-fly, and prints classification inferences and probability scores.
+
+To launch the dashboard from the project root:
+```bash
+python -m streamlit run frontend/app.py
+```
+The app will run locally and open at `http://localhost:8501`.
+

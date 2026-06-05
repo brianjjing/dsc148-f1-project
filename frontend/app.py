@@ -1,15 +1,23 @@
 """
-F1 DNF Prediction — Frontend MVP (look-only).
+F1 DNF Prediction — Frontend Dashboard (Connected to Real LightGBM Model).
 
-Wire the real model in `predict_dnf()` once the artifact is frozen
-(see DEADLINES.md, May 30 I/O freeze).
+Wired directly to model/best_model.joblib and data/ CSV files.
 """
 
-import random
-from datetime import datetime
+import sys
+from pathlib import Path
 
+# Add project root to sys.path to allow model imports
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+import os
+from datetime import datetime
+import numpy as np
 import pandas as pd
 import streamlit as st
+import joblib
 
 st.set_page_config(
     page_title="F1 DNF Predictor",
@@ -49,6 +57,7 @@ st.markdown(
       .pill {
         display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px;
         font-size: 0.75rem; font-weight: 600; letter-spacing: 0.04em;
+        margin-top: 0.5rem;
       }
       .pill-low  { background: #103a1e; color: #4ade80; border: 1px solid #1f6b39; }
       .pill-med  { background: #3a2f10; color: #facc15; border: 1px solid #6b5d1f; }
@@ -64,275 +73,375 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------- Mock reference data ----------
-DRIVERS = [
-    "Lewis Hamilton", "Max Verstappen", "Charles Leclerc", "Sergio Perez",
-    "Carlos Sainz", "Lando Norris", "George Russell", "Fernando Alonso",
-    "Oscar Piastri", "Pierre Gasly", "Esteban Ocon", "Valtteri Bottas",
+# Constants from training script
+FEATURE_COLS = [
+    "grid",
+    "year",
+    "round",
+    "driver_age",
+    "driver_dnf_rate_last5",
+    "driver_dnf_rate_last10",
+    "constructor_dnf_rate_last5",
+    "constructor_dnf_rate_last10",
 ]
-CONSTRUCTORS = [
-    "Mercedes", "Red Bull", "Ferrari", "McLaren", "Aston Martin",
-    "Alpine", "Williams", "Alfa Romeo", "Haas", "AlphaTauri",
-]
-CIRCUITS = [
-    "Monza", "Silverstone", "Monaco", "Spa-Francorchamps", "Suzuka",
-    "Interlagos", "Bahrain", "Circuit de Catalunya", "Hungaroring", "COTA",
-]
-WEATHERS = ["Dry", "Light Rain", "Heavy Rain", "Mixed"]
+CATEGORICAL_COLS = ["circuitId", "constructorId", "driverId"]
 
+# ---------- Helper to load Model & Data ----------
+@st.cache_resource
+def load_predictor():
+    project_root = Path(__file__).resolve().parent.parent
+    model_path = project_root / "model" / "best_model.joblib"
+    if model_path.exists():
+        return joblib.load(model_path)
+    return None
 
-# ---------- Mock model ----------
-def predict_dnf(features: dict) -> dict:
-    """Stub. Replace with real model.predict_proba once artifact is frozen."""
-    random.seed(hash(tuple(sorted(features.items()))) & 0xFFFFFFFF)
-    base = 0.18
-    if features["weather"] == "Heavy Rain":
-        base += 0.22
-    elif features["weather"] == "Light Rain":
-        base += 0.10
-    elif features["weather"] == "Mixed":
-        base += 0.14
-    base += max(0, features["grid_position"] - 10) * 0.012
-    base += features["laps_planned"] / 1000
-    base -= features["driver_experience"] * 0.003
-    base += random.uniform(-0.05, 0.05)
-    prob = float(max(0.02, min(0.95, base)))
+@st.cache_data
+def load_f1_data():
+    from model.model_pipeline import load_raw, build_labeled_frame, add_rolling_features
+    project_root = Path(__file__).resolve().parent.parent
+    data_dir = project_root / "data"
+    
+    # Load raw tables
+    raw = load_raw(data_dir)
+    circuits_df = pd.read_csv(data_dir / "circuits.csv")
+    
+    # Process dataframe
+    df = build_labeled_frame(raw)
+    df = add_rolling_features(df)
+    
+    # Create mappings
+    raw_drivers = raw["drivers"].copy()
+    raw_drivers["full_name"] = raw_drivers["forename"] + " " + raw_drivers["surname"]
+    driver_to_id = dict(zip(raw_drivers["full_name"], raw_drivers["driverId"]))
+    id_to_driver = dict(zip(raw_drivers["driverId"], raw_drivers["full_name"]))
+    id_to_dob = dict(zip(raw_drivers["driverId"], pd.to_datetime(raw_drivers["dob"], errors="coerce")))
+    
+    raw_constructors = raw["constructors"].copy()
+    constructor_to_id = dict(zip(raw_constructors["name"], raw_constructors["constructorId"]))
+    id_to_constructor = dict(zip(raw_constructors["constructorId"], raw_constructors["name"]))
+    
+    circuit_to_id = dict(zip(circuits_df["name"], circuits_df["circuitId"]))
+    id_to_circuit = dict(zip(circuits_df["circuitId"], circuits_df["name"]))
+    
+    # Filter for active/recent entities from year >= 2000 to keep UI lists clean
+    recent_df = df[df["year"] >= 2000]
+    recent_driver_ids = recent_df["driverId"].unique()
+    recent_constructor_ids = recent_df["constructorId"].unique()
+    recent_circuit_ids = recent_df["circuitId"].unique()
+    
+    recent_drivers = sorted([id_to_driver[i] for i in recent_driver_ids if i in id_to_driver])
+    recent_constructors = sorted([id_to_constructor[i] for i in recent_constructor_ids if i in id_to_constructor])
+    recent_circuits = sorted([id_to_circuit[i] for i in recent_circuit_ids if i in id_to_circuit])
+    
+    # Fallback to all if empty
+    if not recent_drivers: recent_drivers = sorted(raw_drivers["full_name"].tolist())
+    if not recent_constructors: recent_constructors = sorted(raw_constructors["name"].tolist())
+    if not recent_circuits: recent_circuits = sorted(circuits_df["name"].tolist())
+        
+    return {
+        "raw": raw,
+        "df": df,
+        "driver_to_id": driver_to_id,
+        "id_to_driver": id_to_driver,
+        "id_to_dob": id_to_dob,
+        "constructor_to_id": constructor_to_id,
+        "id_to_constructor": id_to_constructor,
+        "circuit_to_id": circuit_to_id,
+        "id_to_circuit": id_to_circuit,
+        "recent_drivers": recent_drivers,
+        "recent_constructors": recent_constructors,
+        "recent_circuits": recent_circuits,
+        "all_drivers": sorted(raw_drivers["full_name"].tolist()),
+        "all_constructors": sorted(raw_constructors["name"].tolist()),
+        "all_circuits": sorted(circuits_df["name"].tolist()),
+    }
 
-    contributions = [
-        ("Weather: " + features["weather"], 0.22 if "Rain" in features["weather"] else 0.05),
-        (f"Grid position #{features['grid_position']}", max(0, features["grid_position"] - 10) * 0.012),
-        (f"Constructor: {features['constructor']}", random.uniform(0.02, 0.12)),
-        (f"Circuit: {features['circuit']}", random.uniform(0.01, 0.09)),
-        ("Driver experience", -features["driver_experience"] * 0.003),
-    ]
-    contributions.sort(key=lambda x: abs(x[1]), reverse=True)
-    return {"probability": prob, "contributions": contributions}
+# Load model & datasets
+model = load_predictor()
+try:
+    f1_data = load_f1_data()
+    data_loaded = True
+except Exception as e:
+    data_loaded = False
+    st.error(f"Failed to load dataset: {e}")
 
+# ---------- Model Check & Fallback Training UI ----------
+if model is None:
+    st.warning("⚠️ Pre-trained model (model/best_model.joblib) not found. You must train it before making predictions.")
+    if st.button("🚀 Train Model Now"):
+        with st.spinner("Training model and running Optuna tuning (approx. 45s)..."):
+            try:
+                from model.train_models import main as train_main
+                train_main()
+                st.success("Model trained and saved successfully! Reloading page...")
+                st.rerun()
+            except Exception as ex:
+                st.error(f"Error during training: {ex}")
+    st.stop()
 
-def risk_pill(prob: float) -> str:
-    if prob < 0.25:
+# ---------- Risk rating helper ----------
+def get_risk_pill(prob: float) -> str:
+    if prob < 0.20:
         return '<span class="pill pill-low">LOW RISK</span>'
-    if prob < 0.5:
+    elif prob < 0.40:
         return '<span class="pill pill-med">MEDIUM RISK</span>'
-    return '<span class="pill pill-high">HIGH RISK</span>'
+    else:
+        return '<span class="pill pill-high">HIGH RISK</span>'
 
-
-# ---------- Sidebar — input form ----------
-with st.sidebar:
-    st.markdown("### 🏁 Race Inputs")
-    st.caption("Configure the entry to score for DNF probability.")
-
-    driver = st.selectbox("Driver", DRIVERS, index=1)
-    constructor = st.selectbox("Constructor", CONSTRUCTORS, index=1)
-    circuit = st.selectbox("Circuit", CIRCUITS, index=0)
-    season = st.slider("Season", 1990, 2024, 2023)
-    grid_position = st.number_input("Grid position", min_value=1, max_value=22, value=5)
-    laps_planned = st.number_input("Planned laps", min_value=40, max_value=80, value=58)
-    driver_experience = st.slider("Driver experience (race starts)", 0, 350, 120)
-    weather = st.selectbox("Weather", WEATHERS, index=0)
-    qualifying_gap = st.number_input("Qualifying gap to pole (s)", value=0.45, step=0.05, format="%.2f")
-
-    st.markdown("---")
-    run_pred = st.button("🚦 PREDICT DNF", use_container_width=True)
-
-
-# ---------- Header ----------
+# ---------- Main UI Structure ----------
 st.markdown('<div class="f1-stripe"></div>', unsafe_allow_html=True)
 col_a, col_b = st.columns([0.7, 0.3])
 with col_a:
     st.markdown("# 🏎️ F1 DNF Predictor")
     st.caption(
-        "DSC148 group project — predicting whether a driver will fail to finish a race. "
-        "Built on the Formula 1 World Championship dataset (1950–2020)."
+        "Predicting F1 race-day Did Not Finish (DNF) outcomes using "
+        "historical results, starting grid, and rolling driver/constructor reliability metrics."
     )
 with col_b:
     st.markdown(
-        f"<div class='metric-card'><h3>Last Updated</h3>"
-        f"<div class='v' style='font-size:1.1rem'>{datetime.now().strftime('%Y-%m-%d %H:%M')}</div></div>",
+        f"<div class='metric-card'><h3>Dashboard Status</h3>"
+        f"<div class='v' style='font-size:1.1rem;color:#4ade80'>● Live Model Connected</div></div>",
         unsafe_allow_html=True,
     )
 
-
 # ---------- Tabs ----------
 tab_pred, tab_model, tab_data, tab_about = st.tabs(
-    ["Prediction", "Model Performance", "Dataset Overview", "About"]
+    ["Prediction Playground", "Model Performance", "Dataset Overview", "About the Project"]
 )
 
-# === Prediction tab ===
+# === Tab 1: Prediction Playground ===
 with tab_pred:
-    features = {
-        "driver": driver,
-        "constructor": constructor,
-        "circuit": circuit,
-        "season": season,
-        "grid_position": grid_position,
-        "laps_planned": laps_planned,
-        "driver_experience": driver_experience,
-        "weather": weather,
-        "qualifying_gap": qualifying_gap,
-    }
+    if data_loaded:
+        with st.sidebar:
+            st.markdown("### 🏁 Race Inputs")
+            st.caption("Provide race entries to score DNF probability.")
+            
+            # Show filter options to prevent cluttering dropdowns
+            limit_recent = st.checkbox("Show only modern drivers/tracks (since 2000)", value=True)
+            
+            drivers_list = f1_data["recent_drivers"] if limit_recent else f1_data["all_drivers"]
+            constructors_list = f1_data["recent_constructors"] if limit_recent else f1_data["all_constructors"]
+            circuits_list = f1_data["recent_circuits"] if limit_recent else f1_data["all_circuits"]
+            
+            # Select boxes
+            driver_name = st.selectbox("Select Driver", drivers_list, index=drivers_list.index("Lewis Hamilton") if "Lewis Hamilton" in drivers_list else 0)
+            constructor_name = st.selectbox("Select Constructor", constructors_list, index=constructors_list.index("Mercedes") if "Mercedes" in constructors_list else 0)
+            circuit_name = st.selectbox("Select Circuit", circuits_list, index=circuits_list.index("Autodromo Nazionale di Monza") if "Autodromo Nazionale di Monza" in circuits_list else 0)
+            
+            # Numeric sliders & inputs
+            year = st.slider("Season Year", 1990, 2026, 2024)
+            round_num = st.slider("Race Round Number", 1, 24, 12)
+            grid = st.number_input("Grid Position (1-22)", min_value=1, max_value=22, value=5)
+            
+            st.markdown("---")
+            run_inference = st.button("🚦 CALCULATE DNF RISK", use_container_width=True)
 
-    result = predict_dnf(features) if run_pred else predict_dnf(features)
-    prob = result["probability"]
+        # Lookup IDs
+        d_id = f1_data["driver_to_id"][driver_name]
+        c_id = f1_data["constructor_to_id"][constructor_name]
+        track_id = f1_data["circuit_to_id"][circuit_name]
 
-    left, right = st.columns([0.55, 0.45])
+        # Calculate live features to feed to model
+        raw = f1_data["raw"]
+        df = f1_data["df"]
+        
+        # 1. Determine race date to calculate driver age
+        races_df = raw["races"]
+        match = races_df[(races_df["year"] == year) & (races_df["circuitId"] == track_id)]
+        if not match.empty:
+            race_date = pd.to_datetime(match.iloc[0]["date"], errors="coerce")
+            round_val = int(match.iloc[0]["round"])
+        else:
+            race_date = pd.Timestamp(year, 6, 15)  # fallback middle of the year
+            round_val = round_num
 
-    with left:
-        st.subheader("Prediction")
-        st.markdown(
-            f"<div class='metric-card' style='padding:1.6rem'>"
-            f"<h3>DNF probability for {driver} — {circuit} {season}</h3>"
-            f"<div class='v' style='font-size:3.4rem'>{prob*100:.1f}%</div>"
-            f"{risk_pill(prob)}"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        st.progress(prob)
+        # 2. Driver Age
+        dob = f1_data["id_to_dob"].get(d_id, pd.Timestamp(1990, 1, 1))
+        driver_age = (race_date - dob).days / 365.25
 
-        st.markdown("#### Top Contributing Factors")
-        contrib_df = pd.DataFrame(
-            result["contributions"],
-            columns=["Factor", "Δ probability"],
-        )
-        st.dataframe(
-            contrib_df.style.format({"Δ probability": "{:+.3f}"}),
-            use_container_width=True, hide_index=True,
-        )
+        # 3. Dynamic Driver rolling features (prior to selected date)
+        driver_history = df[(df["driverId"] == d_id) & (df["date"] < race_date)]
+        if not driver_history.empty:
+            past_dnfs = driver_history.sort_values("date")["dnf"].tolist()
+            driver_dnf_last5 = np.mean(past_dnfs[-5:]) if len(past_dnfs) >= 2 else np.nan
+            driver_dnf_last10 = np.mean(past_dnfs[-10:]) if len(past_dnfs) >= 2 else np.nan
+        else:
+            driver_dnf_last5 = np.nan
+            driver_dnf_last10 = np.nan
 
-    with right:
-        st.subheader("Entry Summary")
-        summary = pd.DataFrame(
-            [
-                ("Driver", driver),
-                ("Constructor", constructor),
-                ("Circuit", circuit),
-                ("Season", season),
-                ("Grid", f"P{grid_position}"),
-                ("Planned laps", laps_planned),
-                ("Experience", f"{driver_experience} starts"),
-                ("Weather", weather),
-                ("Quali gap to pole", f"+{qualifying_gap:.2f}s"),
-            ],
-            columns=["Field", "Value"],
-        )
-        st.dataframe(summary, use_container_width=True, hide_index=True)
+        # 4. Dynamic Constructor rolling features (prior to selected date)
+        constructor_history = df[(df["constructorId"] == c_id) & (df["date"] < race_date)]
+        if not constructor_history.empty:
+            past_dnfs_c = constructor_history.sort_values("date")["dnf"].tolist()
+            constructor_dnf_last5 = np.mean(past_dnfs_c[-5:]) if len(past_dnfs_c) >= 2 else np.nan
+            constructor_dnf_last10 = np.mean(past_dnfs_c[-10:]) if len(past_dnfs_c) >= 2 else np.nan
+        else:
+            constructor_dnf_last5 = np.nan
+            constructor_dnf_last10 = np.nan
 
-        st.markdown("#### Historical DNF rate")
-        hist = pd.DataFrame(
-            {
-                "Season": list(range(2014, 2024)),
-                "DNF rate": [0.21, 0.19, 0.22, 0.17, 0.18, 0.16, 0.14, 0.17, 0.15, 0.16],
-            }
-        ).set_index("Season")
-        st.line_chart(hist, height=200)
+        # Create input feature dictionary matching model format
+        input_features = {
+            "grid": grid,
+            "year": year,
+            "round": round_val,
+            "driver_age": driver_age,
+            "driver_dnf_rate_last5": driver_dnf_last5,
+            "driver_dnf_rate_last10": driver_dnf_last10,
+            "constructor_dnf_rate_last5": constructor_dnf_last5,
+            "constructor_dnf_rate_last10": constructor_dnf_last10,
+            "circuitId": track_id,
+            "constructorId": c_id,
+            "driverId": d_id
+        }
 
+        # Build dataframe row
+        row_df = pd.DataFrame([input_features])
+        for col in CATEGORICAL_COLS:
+            row_df[col] = pd.Categorical(row_df[col], categories=df[col].unique())
 
-# === Model Performance tab ===
+        # Impute missing values with training means (consistent with modeling step)
+        train_df = df[df["year"] < 2018]
+        imputation_means = {}
+        for col in FEATURE_COLS:
+            mean_val = train_df[col].mean()
+            imputation_means[col] = 0.0 if pd.isna(mean_val) else mean_val
+            row_df[col] = row_df[col].fillna(imputation_means[col])
+
+        # Order columns correctly
+        row_df = row_df[FEATURE_COLS + CATEGORICAL_COLS]
+
+        # Execute prediction
+        probabilities = model.predict_proba(row_df)
+        prob = float(probabilities[0, 1])
+        prediction = "DNF (Did Not Finish)" if prob > 0.5 else "Finished (Completed Race)"
+
+        # Layout prediction results
+        left, right = st.columns([0.55, 0.45])
+
+        with left:
+            st.subheader("Prediction Result")
+            st.markdown(
+                f"<div class='metric-card' style='padding:1.6rem'>"
+                f"<h3>DNF Risk Analysis for {driver_name}</h3>"
+                f"<div class='v' style='font-size:3.4rem'>{prob*100:.1f}%</div>"
+                f"<strong>Classification Inference:</strong> {prediction}<br/>"
+                f"{get_risk_pill(prob)}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            st.progress(prob)
+
+            # Explanatory Factor Analysis
+            st.markdown("#### Input Feature Values fed to Model")
+            feature_display = pd.DataFrame([
+                ("Starting Grid", f"P{grid}", "Direct user input"),
+                ("Driver Age", f"{driver_age:.1f} years", f"Calculated from DOB: {dob.strftime('%Y-%m-%d')}"),
+                ("Driver DNF Rate (Last 5 races)", f"{driver_dnf_last5*100:.1f}%" if not pd.isna(driver_dnf_last5) else "Imputed default (0.0% / new driver)", "Calculated from driver history"),
+                ("Driver DNF Rate (Last 10 races)", f"{driver_dnf_last10*100:.1f}%" if not pd.isna(driver_dnf_last10) else "Imputed default (0.0% / new driver)", "Calculated from driver history"),
+                ("Constructor DNF Rate (Last 5 races)", f"{constructor_dnf_last5*100:.1f}%" if not pd.isna(constructor_dnf_last5) else "Imputed default (0.0%)", "Calculated from constructor history"),
+                ("Constructor DNF Rate (Last 10 races)", f"{constructor_dnf_last10*100:.1f}%" if not pd.isna(constructor_dnf_last10) else "Imputed default (0.0%)", "Calculated from constructor history"),
+                ("Circuit ID", f"ID {track_id}", "Categorical variable"),
+                ("Driver ID", f"ID {d_id}", "Categorical variable"),
+                ("Constructor ID", f"ID {c_id}", "Categorical variable"),
+            ], columns=["Feature", "Value", "Notes"])
+            st.dataframe(feature_display, use_container_width=True, hide_index=True)
+
+        with right:
+            st.subheader("Interactive Summary")
+            summary_table = pd.DataFrame([
+                ("Selected Driver", driver_name),
+                ("Selected Constructor", constructor_name),
+                ("Selected Track", circuit_name),
+                ("Assigned Race Year", year),
+                ("Assigned Race Round", round_val),
+            ], columns=["Race Field", "Input Selection"])
+            st.dataframe(summary_table, use_container_width=True, hide_index=True)
+
+            # DNF history visualization
+            st.markdown("#### Historical F1 Overall DNF Rate (1950 - 2020)")
+            dnf_distribution = df.groupby("year")["dnf"].mean().reset_index()
+            dnf_distribution.columns = ["Year", "DNF Rate"]
+            st.line_chart(dnf_distribution.set_index("Year"), height=200)
+
+# === Tab 2: Model Performance ===
 with tab_model:
-    st.subheader("Model Comparison")
-    st.caption("Snapshot from the latest training run. Replace with frozen v1 metrics on May 23.")
+    st.subheader("Model Evaluation & Comparisons")
+    st.caption("These are the actual training, optimization, and validation metrics calculated during model script execution.")
 
-    m1, m2, m3, m4 = st.columns(4)
-    for col, name, val in [
-        (m1, "AUC (best)", "0.812"),
-        (m2, "F1 (best)", "0.541"),
-        (m3, "Precision", "0.598"),
-        (m4, "Recall", "0.495"),
-    ]:
-        with col:
-            st.markdown(
-                f"<div class='metric-card'><h3>{name}</h3><div class='v'>{val}</div></div>",
-                unsafe_allow_html=True,
-            )
+    # High-level metrics for best model (LightGBM Tuned)
+    e1, e2, e3, e4 = st.columns(4)
+    with e1:
+        st.markdown("<div class='metric-card'><h3>Validation F1-Score</h3><div class='v'>0.1972</div></div>", unsafe_allow_html=True)
+    with e2:
+        st.markdown("<div class='metric-card'><h3>Validation Recall</h3><div class='v'>0.2500</div></div>", unsafe_allow_html=True)
+    with e3:
+        st.markdown("<div class='metric-card'><h3>Validation Precision</h3><div class='v'>0.1628</div></div>", unsafe_allow_html=True)
+    with e4:
+        st.markdown("<div class='metric-card'><h3>Validation ROC-AUC</h3><div class='v'>0.5284</div></div>", unsafe_allow_html=True)
 
-    st.markdown("#### Metrics by model")
-    metrics_df = pd.DataFrame(
+    # Detailed table comparison
+    st.markdown("#### Full Model Comparison Table (Test Set Results)")
+    compare_df = pd.DataFrame(
         {
-            "Model": ["Baseline (logistic)", "Random Forest", "Gradient Boosting", "XGBoost (tuned)"],
-            "AUC": [0.701, 0.778, 0.795, 0.812],
-            "F1": [0.402, 0.490, 0.521, 0.541],
-            "Precision": [0.481, 0.553, 0.580, 0.598],
-            "Recall": [0.346, 0.440, 0.474, 0.495],
+            "Model": ["Logistic Regression (L2)", "Naive Bayes", "Random Forest", "XGBoost", "LightGBM (Tuned)"],
+            "Accuracy": [0.8348, 0.8311, 0.8493, 0.8365, 0.6931],
+            "F1-Score": [0.0540, 0.0492, 0.0089, 0.0581, 0.1972],
+            "Precision": [0.1972, 0.1625, 0.5000, 0.2206, 0.1628],
+            "Recall": [0.0313, 0.0290, 0.0045, 0.0335, 0.2500],
+            "AUC": [0.5469, 0.5070, 0.5649, 0.5715, 0.5284],
         }
     )
-    st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+    st.dataframe(compare_df.style.highlight_max(axis=0, subset=["F1-Score", "AUC"], color="#3a1a1a"), use_container_width=True, hide_index=True)
 
-    st.markdown("#### AUC by season (time-based split)")
-    auc_df = pd.DataFrame(
-        {
-            "Season": list(range(2016, 2024)),
-            "Baseline": [0.68, 0.69, 0.70, 0.70, 0.71, 0.71, 0.70, 0.70],
-            "XGBoost":  [0.74, 0.76, 0.78, 0.79, 0.80, 0.81, 0.81, 0.81],
-        }
-    ).set_index("Season")
-    st.line_chart(auc_df, height=260)
+    # Display feature importances directly from the trained LightGBM model
+    st.markdown("#### LightGBM Model Feature Importances")
+    if hasattr(model, "feature_importances_") and hasattr(model, "feature_name_"):
+        importance_df = pd.DataFrame({
+            "Feature": model.feature_name_,
+            "Split Importance": model.feature_importances_
+        }).sort_values("Split Importance", ascending=True)
+        st.bar_chart(importance_df.set_index("Feature"), height=250)
 
-
-# === Dataset tab ===
+# === Tab 3: Dataset Overview ===
 with tab_data:
-    st.subheader("Dataset Overview")
-    st.caption("Kaggle — Formula 1 World Championship (1950–2020), Rohan Rao.")
+    st.subheader("Formula 1 World Championship Dataset (1950–2020)")
+    st.caption("Descriptive dataset statistics computed dynamically from your local CSV resources.")
 
-    c1, c2, c3, c4 = st.columns(4)
-    for col, name, val in [
-        (c1, "Races", "1,079"),
-        (c2, "Drivers", "857"),
-        (c3, "Results rows", "25,840"),
-        (c4, "Seasons", "1950–2020"),
-    ]:
-        with col:
-            st.markdown(
-                f"<div class='metric-card'><h3>{name}</h3><div class='v'>{val}</div></div>",
-                unsafe_allow_html=True,
-            )
+    if data_loaded:
+        r1, r2, r3, r4 = st.columns(4)
+        with r1:
+            st.markdown(f"<div class='metric-card'><h3>Total Drivers</h3><div class='v'>{len(f1_data['all_drivers'])}</div></div>", unsafe_allow_html=True)
+        with r2:
+            st.markdown(f"<div class='metric-card'><h3>Total Constructors</h3><div class='v'>{len(f1_data['all_constructors'])}</div></div>", unsafe_allow_html=True)
+        with r3:
+            st.markdown(f"<div class='metric-card'><h3>Total Circuits</h3><div class='v'>{len(f1_data['all_circuits'])}</div></div>", unsafe_allow_html=True)
+        with r4:
+            st.markdown(f"<div class='metric-card'><h3>Total Results Rows</h3><div class='v'>{len(df):,}</div></div>", unsafe_allow_html=True)
 
-    st.markdown("#### DNF distribution by status")
-    status_df = pd.DataFrame(
-        {
-            "Status": ["Finished", "Engine", "Collision", "Gearbox", "Hydraulics", "Accident", "Electrical", "Other"],
-            "Count":  [18020, 1620, 1180, 880, 540, 760, 690, 2150],
-        }
-    ).set_index("Status")
-    st.bar_chart(status_df, height=280)
+        st.markdown("#### Sample Dataset Rows (Cleaned & Labeled)")
+        st.dataframe(df[["year", "round", "driverId", "constructorId", "circuitId", "grid", "driver_age", "dnf"]].head(10), use_container_width=True, hide_index=True)
 
-    st.markdown("#### Sample of joined `results × status × races`")
-    sample = pd.DataFrame(
-        {
-            "season": [2022, 2022, 2021, 2021, 2020],
-            "race": ["Monza", "Silverstone", "Spa", "Monaco", "Suzuka"],
-            "driver": ["M. Verstappen", "L. Hamilton", "C. Leclerc", "S. Perez", "F. Alonso"],
-            "grid": [7, 5, 4, 8, 14],
-            "status": ["Finished", "Finished", "Hydraulics", "Finished", "Collision"],
-            "dnf": [0, 0, 1, 0, 1],
-        }
-    )
-    st.dataframe(sample, use_container_width=True, hide_index=True)
-
-
-# === About tab ===
+# === Tab 4: About the Project ===
 with tab_about:
-    st.subheader("About this project")
+    st.subheader("About the Project")
     st.markdown(
         """
-        **Course:** DSC148 (UCSD, Spring 2026)
-        **Goal:** Binary classification — predict whether a driver **did not finish (DNF)** a race.
-        **Data:** Formula 1 World Championship dataset (Kaggle, Rohan Rao).
-
-        **Front-end status:** MVP shell (this app). Real model is wired in `predict_dnf()`
-        once the `model.joblib` artifact + feature column list are frozen
-        (see `DEADLINES.md`, May 30 I/O contract).
-
-        **Deliverable mapping (DEADLINES.md):**
-        - ✅ May 30 — FE MVP wired to agreed I/O contract (in progress)
-        - ⏳ June 6 — FE uses final model path
-        - ⏳ June 7 — Submit
+        **Goal:** Binary classification — predict whether an F1 driver will experience a DNF (Did Not Finish) on race day.  
+        **Data Sources:** Formula 1 World Championship dataset (Kaggle, Rohan Rao).
+        
+        **Model Integration Logic:**
+        1. User inputs a driver, constructor, and track.
+        2. The application looks up the unique driver ID, constructor ID, and track ID.
+        3. Rolling reliability variables (DNF rates in the last 5/10 races) are calculated dynamically on-the-fly from historical results.
+        4. Driver age is calculated dynamically from the driver's date of birth and the chosen race date.
+        5. Categorical features are cast to categorical dtypes matching the original dataset mappings.
+        6. The pre-trained LightGBM model is run using `predict_proba` to deliver real-time inference.
         """
     )
-    st.info("Replace mock metrics and sample rows with the frozen model output before June 6 integration.")
-
+    st.success("✅ Working Demo fully implemented and wired to the real pre-trained LightGBM model (best_model.joblib)!")
 
 # ---------- Footer ----------
 st.markdown(
-    '<div class="footer">DSC148 · F1 DNF Prediction · Frontend MVP</div>',
+    '<div class="footer">F1 DNF Prediction · Interactive Demo Dashboard</div>',
     unsafe_allow_html=True,
 )
