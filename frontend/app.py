@@ -101,6 +101,27 @@ def load_f1_data():
     project_root = Path(__file__).resolve().parent.parent
     data_dir = project_root / "data"
     
+    # Automatic download if dataset files are missing
+    required_files = ["results.csv", "status.csv", "races.csv", "drivers.csv", "constructors.csv", "circuits.csv"]
+    missing_files = [f for f in required_files if not (data_dir / f).exists()]
+    if missing_files:
+        import zipfile
+        import gdown
+        data_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = data_dir / "archive.zip"
+        # Download the dataset zip from Google Drive
+        gdown.download(
+            "https://drive.google.com/uc?id=1-tr5mnzHvhITodbDKmefVOz926ZU5zOO",
+            str(zip_path),
+            quiet=False
+        )
+        # Extract
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(data_dir)
+        # Clean up the zip file to save space
+        if zip_path.exists():
+            zip_path.unlink()
+            
     # Load raw tables
     raw = load_raw(data_dir)
     circuits_df = pd.read_csv(data_dir / "circuits.csv")

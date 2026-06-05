@@ -1,3 +1,13 @@
+---
+title: F1 DNF Predictor
+emoji: 🏎️
+colorFrom: red
+colorTo: gray
+sdk: streamlit
+app_file: frontend/app.py
+pinned: false
+---
+
 # Formula 1 DNF Prediction
 
 This project uses historical Formula 1 race data to build a model that predicts whether a driver **did not finish (DNF)** a race.
