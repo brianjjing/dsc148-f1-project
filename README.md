@@ -10,6 +10,8 @@ pinned: false
 
 # Formula 1 DNF Prediction
 
+**Live Demo:** [Hugging Face Space](https://huggingface.co/spaces/EricGan64/F1-project)
+
 This project uses historical Formula 1 race data to build a model that predicts whether a driver **did not finish (DNF)** a race.
 
 ## Dataset
@@ -47,14 +49,3 @@ For imports and paths to resolve correctly, always launch Jupyter or start your 
 ```bash
 python model/train_models.py
 ```
-
-## Running the Interactive Demo Dashboard
-
-We built a live **Streamlit dashboard** that allows users to make real-time predictions. The interface maps driver, constructor, and track inputs to their exact historical IDs, computes rolling DNF rates and ages on-the-fly, and prints classification inferences and probability scores.
-
-To launch the dashboard from the project root:
-```bash
-python -m streamlit run frontend/app.py
-```
-The app will run locally and open at `http://localhost:8501`.
-
